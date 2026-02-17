@@ -7,6 +7,7 @@ const speedButtons = Array.from(document.querySelectorAll(".speed-button"));
 const speedLabel = document.getElementById("speed-label");
 const levelNameEl = document.getElementById("level-name");
 const sidebarCard = document.querySelector(".sidebar-card");
+const mobileButtons = Array.from(document.querySelectorAll(".mobile-arrow"));
 
 const tileSize = 24;
 const levels = [
@@ -62,10 +63,11 @@ const levels = [
 
 const ghostPalette = ["#ff9fbc", "#9fe7c4", "#ffd38a"];
 const defaultGhostStarts = [
-  { x: 9, y: 8, dir: { x: -1, y: 0 } },
-  { x: 9, y: 10, dir: { x: 1, y: 0 } },
-  { x: 8, y: 9, dir: { x: 0, y: -1 } },
+  { x: 1, y: 1, dir: { x: 1, y: 0 } },
+  { x: 17, y: 1, dir: { x: -1, y: 0 } },
+  { x: 17, y: 17, dir: { x: -1, y: 0 } },
 ];
+const ghostBehaviors = ["chase", "ambush", "roam"];
 
 let currentLevelIndex = 0;
 let currentMap = levels[currentLevelIndex].map;
@@ -92,6 +94,12 @@ const speedIntervals = [240, 210, 180, 150, 120];
 let speedIndex = 2;
 let stepInterval = speedIntervals[speedIndex];
 let audioContext;
+const directionByName = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
 
 const pellets = new Set();
 let powerPellets = new Set();
@@ -107,6 +115,22 @@ let levelAdvanceTimer = null;
 let victoryStartTime = null;
 let lastVictoryTime = 0;
 let confetti = [];
+
+function getScatterTarget(index) {
+  const corners = [
+    { x: 1, y: 1 },
+    { x: cols - 2, y: 1 },
+    { x: 1, y: rows - 2 },
+    { x: cols - 2, y: rows - 2 },
+  ];
+  return corners[index % corners.length];
+}
+
+function queueDirection(name) {
+  const dir = directionByName[name];
+  if (!dir || !pacman) return;
+  pacman.nextDir = { ...dir };
+}
 
 function initLevel() {
   pellets.clear();
@@ -137,8 +161,12 @@ function initLevel() {
   ghosts = ghostStarts.map((ghost, index) => ({
     x: ghost.x,
     y: ghost.y,
+    prevX: ghost.x,
+    prevY: ghost.y,
     dir: { ...ghost.dir },
     color: ghostPalette[index % ghostPalette.length],
+    behavior: ghost.behavior || ghostBehaviors[index % ghostBehaviors.length],
+    scatterTarget: ghost.scatterTarget || getScatterTarget(index),
   }));
   powerTimer = 0;
   gameOver = false;
@@ -250,6 +278,8 @@ function resetPositions() {
     const start = ghostStarts[index] || ghostStarts[0];
     ghost.x = start.x;
     ghost.y = start.y;
+    ghost.prevX = start.x;
+    ghost.prevY = start.y;
     ghost.dir = { ...start.dir };
   });
 }
@@ -322,6 +352,34 @@ function availableDirections(entity) {
   return options;
 }
 
+function isOneTileBehindPacman(entity) {
+  return (
+    pacman.x - entity.x === pacman.dir.x &&
+    pacman.y - entity.y === pacman.dir.y
+  );
+}
+
+function getGhostTarget(entity) {
+  if (entity.behavior === "ambush") {
+    return {
+      x: pacman.x + pacman.dir.x * 3,
+      y: pacman.y + pacman.dir.y * 3,
+    };
+  }
+
+  if (entity.behavior === "roam") {
+    if (Math.random() < 0.35) {
+      return {
+        x: pacman.x + pacman.dir.y * 2,
+        y: pacman.y - pacman.dir.x * 2,
+      };
+    }
+    return entity.scatterTarget;
+  }
+
+  return { x: pacman.x, y: pacman.y };
+}
+
 function pickDirection(entity, frightened) {
   const options = availableDirections(entity);
   if (options.length === 0) return entity.dir;
@@ -337,12 +395,17 @@ function pickDirection(entity, frightened) {
     return choices[Math.floor(Math.random() * choices.length)];
   }
 
+  const target = getGhostTarget(entity);
+  const tailingPacman = isOneTileBehindPacman(entity);
   let best = choices[0];
   let bestScore = Infinity;
   for (const dir of choices) {
     const nx = entity.x + dir.x;
     const ny = entity.y + dir.y;
-    const dist = Math.abs(nx - pacman.x) + Math.abs(ny - pacman.y);
+    let dist = Math.abs(nx - target.x) + Math.abs(ny - target.y);
+    if (tailingPacman && dir.x === pacman.dir.x && dir.y === pacman.dir.y) {
+      dist += 3;
+    }
     if (dist < bestScore) {
       bestScore = dist;
       best = dir;
@@ -353,20 +416,32 @@ function pickDirection(entity, frightened) {
 
 function moveGhosts() {
   for (const ghost of ghosts) {
+    ghost.prevX = ghost.x;
+    ghost.prevY = ghost.y;
     ghost.dir = pickDirection(ghost, powerTimer > 0);
     ghost.x += ghost.dir.x;
     ghost.y += ghost.dir.y;
   }
 }
 
-function handleCollisions() {
+function handleCollisions(pacmanPrev) {
   ghosts.forEach((ghost, index) => {
-    if (ghost.x === pacman.x && ghost.y === pacman.y) {
+    const sameTile = ghost.x === pacman.x && ghost.y === pacman.y;
+    const swappedTiles =
+      pacmanPrev &&
+      ghost.prevX === pacman.x &&
+      ghost.prevY === pacman.y &&
+      ghost.x === pacmanPrev.x &&
+      ghost.y === pacmanPrev.y;
+    if (sameTile || swappedTiles) {
       if (powerTimer > 0) {
         score += 200;
         const start = ghostStarts[index] || ghostStarts[0];
         ghost.x = start.x;
         ghost.y = start.y;
+        ghost.prevX = start.x;
+        ghost.prevY = start.y;
+        ghost.dir = { ...start.dir };
       } else {
         lives -= 1;
         if (lives <= 0) {
@@ -494,10 +569,13 @@ function update(time) {
   }
 
   if (time - lastStep > stepInterval) {
+    const pacmanPrev = { x: pacman.x, y: pacman.y };
     movePacman();
-    moveGhosts();
-    handleCollisions();
-    if (powerTimer > 0) powerTimer -= 1;
+    if (!gameOver) {
+      moveGhosts();
+      handleCollisions(pacmanPrev);
+      if (powerTimer > 0) powerTimer -= 1;
+    }
     lastStep = time;
   }
 
@@ -698,20 +776,75 @@ speedButtons.forEach((button) => {
   });
 });
 
+mobileButtons.forEach((button) => {
+  const dir = button.dataset.dir;
+  const activate = () => {
+    queueDirection(dir);
+    button.classList.add("is-active");
+  };
+  const deactivate = () => {
+    button.classList.remove("is-active");
+  };
+
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    activate();
+  });
+  button.addEventListener("pointerup", () => {
+    deactivate();
+  });
+  button.addEventListener("pointercancel", () => {
+    deactivate();
+  });
+  button.addEventListener("pointerleave", () => {
+    deactivate();
+  });
+  button.addEventListener("touchstart", (event) => {
+    event.preventDefault();
+    activate();
+  });
+  button.addEventListener("touchend", () => {
+    deactivate();
+  });
+  button.addEventListener("touchcancel", () => {
+    deactivate();
+  });
+  button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    activate();
+  });
+  button.addEventListener("mouseup", () => {
+    deactivate();
+  });
+  button.addEventListener("mouseleave", () => {
+    deactivate();
+  });
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    queueDirection(dir);
+  });
+});
+
 window.addEventListener("keydown", (event) => {
-  if (event.key === "ArrowUp" || event.key === "w" || event.key === "W") {
-    pacman.nextDir = { x: 0, y: -1 };
+  const key = event.key.toLowerCase();
+  if (key === "arrowup" || key === "w") {
+    event.preventDefault();
+    queueDirection("up");
   }
-  if (event.key === "ArrowDown" || event.key === "s" || event.key === "S") {
-    pacman.nextDir = { x: 0, y: 1 };
+  if (key === "arrowdown" || key === "s") {
+    event.preventDefault();
+    queueDirection("down");
   }
-  if (event.key === "ArrowLeft" || event.key === "a" || event.key === "A") {
-    pacman.nextDir = { x: -1, y: 0 };
+  if (key === "arrowleft" || key === "a") {
+    event.preventDefault();
+    queueDirection("left");
   }
-  if (event.key === "ArrowRight" || event.key === "d" || event.key === "D") {
-    pacman.nextDir = { x: 1, y: 0 };
+  if (key === "arrowright" || key === "d") {
+    event.preventDefault();
+    queueDirection("right");
   }
-  if (event.key === "r" || event.key === "R") {
+  if (key === "r") {
+    event.preventDefault();
     restart();
   }
 });

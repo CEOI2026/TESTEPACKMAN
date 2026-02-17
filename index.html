@@ -70,10 +70,16 @@
         <section class="stage">
           <canvas id="game" width="456" height="456" aria-label="Jogo Pacman selva gelada"></canvas>
           <div class="message" id="message" aria-live="polite"></div>
+          <div class="mobile-controls" aria-label="Controlos de toque">
+            <button class="mobile-arrow up" data-dir="up" type="button" aria-label="Mover para cima">&uarr;</button>
+            <button class="mobile-arrow left" data-dir="left" type="button" aria-label="Mover para a esquerda">&larr;</button>
+            <button class="mobile-arrow right" data-dir="right" type="button" aria-label="Mover para a direita">&rarr;</button>
+            <button class="mobile-arrow down" data-dir="down" type="button" aria-label="Mover para baixo">&darr;</button>
+          </div>
         </section>
 
         <footer class="controls">
-          <div>Mover: Setas ou WASD</div>
+          <div>Mover: setas no ecr&atilde; (mobile)</div>
           <div>Reiniciar: R</div>
         </footer>
       </section>
